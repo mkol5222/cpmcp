@@ -408,7 +408,7 @@ function buildDialogHtml(message, configPath) {
     '</div>',
     '<div class="field">',
     '<label for="api-key">API key</label>',
-    '<input id="api-key" type="text" placeholder="overrides username and password">',
+    '<input id="api-key" type="password" placeholder="overrides username and password">',
     '</div>',
     '<div class="field">',
     '<label for="username">Username</label>',
