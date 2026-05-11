@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 
+const { randomInt } = require('node:crypto');
+const { spawn } = require('node:child_process');
 const fs = require('node:fs');
+const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 
@@ -53,6 +56,13 @@ function deriveEnvValues(formValues) {
   };
 }
 
+function createSubmitResponse(configPath, formValues) {
+  return {
+    claudeDesktopConfig: configPath || 'no Claude Desktop installation detected',
+    checkPointConfig: deriveEnvValues(formValues),
+  };
+}
+
 function buildDialogHtml(message, configPath) {
   const title = configPath ? 'Claude Desktop config detected' : 'Claude Desktop config not detected';
   const body = configPath ? configPath : message;
@@ -81,8 +91,14 @@ function buildDialogHtml(message, configPath) {
     '.field input { width: 100%; padding: 11px 12px; border: 1px solid #d2d9e4; border-radius: 12px; background: #ffffff; color: #14181f; font: inherit; }',
     '.field input::placeholder { color: #8a94a5; }',
     '.field-note { margin: 0; color: #707b8c; font-size: 12px; line-height: 1.4; }',
+    '.status { margin-top: 14px; color: #576171; font-size: 13px; line-height: 1.5; }',
+    '.result { display: none; margin-top: 18px; padding-top: 18px; border-top: 1px solid #e3e8ef; }',
+    '.result.is-visible { display: block; }',
+    '.result h2 { margin: 0 0 10px; font-size: 18px; line-height: 1.25; }',
+    '.result-block { margin: 0 0 14px; padding: 14px 16px; border-radius: 14px; background: #f7f9fc; border: 1px solid #e3e8ef; color: #222934; font-size: 14px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }',
     '.actions { display: flex; justify-content: flex-end; margin-top: 20px; }',
     'button { appearance: none; border: 0; border-radius: 999px; padding: 11px 20px; min-width: 92px; background: #e31b23; color: #ffffff; font: inherit; font-weight: 700; cursor: pointer; }',
+    'button:disabled { opacity: 0.65; cursor: progress; }',
     'button:focus-visible { outline: 3px solid rgba(237, 28, 36, 0.28); outline-offset: 3px; }',
     '@media (max-width: 520px) { .dialog { padding: 20px; } h1 { font-size: 23px; } }',
     '</style>',
@@ -113,18 +129,54 @@ function buildDialogHtml(message, configPath) {
     '</div>',
     '<p class="field-note">API key overrides username and password when provided.</p>',
     '</div>',
+    '<p id="status" class="status"></p>',
     '<div class="actions">',
     '<button id="ok-button" type="button" autofocus>OK</button>',
     '</div>',
+    '<section id="result" class="result" aria-live="polite">',
+    '<h2>Configuration saved</h2>',
+    '<div id="claude-result" class="result-block"></div>',
+    '<div id="checkpoint-result" class="result-block"></div>',
+    '<p class="summary">You can now close this page.</p>',
+    '</section>',
     '<script>',
-    'document.getElementById("ok-button").addEventListener("click", () => {',
-    '  window.glimpse.send({',
-    '    action: "ok",',
+    'const okButton = document.getElementById("ok-button");',
+    'const status = document.getElementById("status");',
+    'const fields = document.querySelector(".fields");',
+    'const actions = document.querySelector(".actions");',
+    'const result = document.getElementById("result");',
+    'const claudeResult = document.getElementById("claude-result");',
+    'const checkpointResult = document.getElementById("checkpoint-result");',
+    'okButton.addEventListener("click", async () => {',
+    '  okButton.disabled = true;',
+    '  status.textContent = "Submitting...";',
+    '  const payload = {',
     '    managementServer: document.getElementById("management-server").value,',
     '    apiKey: document.getElementById("api-key").value,',
     '    username: document.getElementById("username").value,',
     '    password: document.getElementById("password").value',
-    '  });',
+    '  };',
+    '  try {',
+    '    const response = await fetch("/api/submit", {',
+    '      method: "POST",',
+    '      headers: { "Content-Type": "application/json" },',
+    '      body: JSON.stringify(payload)',
+    '    });',
+    '    if (!response.ok) {',
+    '      throw new Error(`Request failed: ${response.status}`);',
+    '    }',
+    '    const data = await response.json();',
+    '    const checkPointConfig = data.checkPointConfig || {};',
+    '    claudeResult.textContent = `Claude Desktop config is:\n${data.claudeDesktopConfig || "no Claude Desktop installation detected"}`;',
+    '    checkpointResult.textContent = `Check Point config is:\nS1C_URL: ${checkPointConfig.S1C_URL || ""}\nMANAGEMENT_HOST: ${checkPointConfig.MANAGEMENT_HOST || ""}\nAPI_KEY: ${checkPointConfig.API_KEY || ""}\nUSERNAME: ${checkPointConfig.USERNAME || ""}\nPASSWORD: ${checkPointConfig.PASSWORD || ""}`;',
+    '    fields.style.display = "none";',
+    '    actions.style.display = "none";',
+    '    status.textContent = "";',
+    '    result.classList.add("is-visible");',
+    '  } catch (error) {',
+    '    okButton.disabled = false;',
+    '    status.textContent = `Submission failed: ${error.message}`;',
+    '  }',
     '});',
     '</script>',
     '</main>',
@@ -134,38 +186,128 @@ function buildDialogHtml(message, configPath) {
   ].join('');
 }
 
-async function showDialog(message, configPath) {
-  const { open } = await import('glimpseui');
-
-  return new Promise((resolve, reject) => {
-    const win = open(buildDialogHtml(message, configPath), {
-      width: 560,
-      height: 640,
-      title: 'cpmcp',
-    });
-
-    win.once('message', (data) => {
-      if (data && data.action === 'ok') {
-        win.close();
-        resolve(data);
-      }
-    });
-
-    win.once('closed', () => resolve(null));
-    win.once('error', reject);
-  });
-}
-
-function getConsoleSummary(dialogResult) {
+function getConsoleSummary(configPath, dialogResult) {
   const envValues = deriveEnvValues(dialogResult || createDefaultFormValues());
 
   return [
+    `CLAUDE_DESKTOP_CONFIG: ${configPath || 'no Claude Desktop installation detected'}`,
     `S1C_URL: ${envValues.S1C_URL}`,
     `MANAGEMENT_HOST: ${envValues.MANAGEMENT_HOST}`,
     `API_KEY: ${envValues.API_KEY}`,
     `USERNAME: ${envValues.USERNAME}`,
     `PASSWORD: ${envValues.PASSWORD}`,
   ].join('\n');
+}
+
+function openBrowser(url) {
+  if (process.platform === 'darwin') {
+    spawn('open', [url], { detached: true, stdio: 'ignore' }).unref();
+    return;
+  }
+
+  if (process.platform === 'win32') {
+    spawn('cmd', ['/c', 'start', '', url], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    }).unref();
+    return;
+  }
+
+  spawn('xdg-open', [url], { detached: true, stdio: 'ignore' }).unref();
+}
+
+function startLocalServer(message, configPath, openHandler = openBrowser) {
+  return new Promise((resolve, reject) => {
+    let server;
+    let submitResolved = false;
+    let resolveSubmitted;
+    const submitted = new Promise((submittedResolve) => {
+      resolveSubmitted = submittedResolve;
+    });
+
+    const finishSubmission = (result) => {
+      if (submitResolved) {
+        return;
+      }
+
+      submitResolved = true;
+      resolveSubmitted(result);
+    };
+
+    const tryListen = (remainingAttempts) => {
+      const port = randomInt(11151, 22260);
+      server = http.createServer((request, response) => {
+        const requestUrl = new URL(request.url || '/', 'http://127.0.0.1');
+
+        if (request.method === 'GET' && requestUrl.pathname === '/') {
+          response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          response.end(buildDialogHtml(message, configPath));
+          return;
+        }
+
+        if (request.method === 'POST' && requestUrl.pathname === '/api/submit') {
+          let bodyBuffer = '';
+
+          request.setEncoding('utf8');
+          request.on('data', (chunk) => {
+            bodyBuffer += chunk;
+
+            if (bodyBuffer.length > 16 * 1024) {
+              response.writeHead(413, { 'Content-Type': 'application/json; charset=utf-8' });
+              response.end(JSON.stringify({ error: 'Payload too large' }));
+              request.destroy();
+            }
+          });
+
+          request.on('end', () => {
+            try {
+              const parsedBody = JSON.parse(bodyBuffer || '{}');
+              const responsePayload = createSubmitResponse(configPath, parsedBody);
+              response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+              response.end(JSON.stringify(responsePayload));
+              server.close(() => finishSubmission(parsedBody));
+            } catch {
+              response.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+              response.end(JSON.stringify({ error: 'Invalid JSON payload' }));
+            }
+          });
+
+          return;
+        }
+
+        response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+        response.end('Not found');
+      });
+
+      server.once('error', (error) => {
+        if (error && error.code === 'EADDRINUSE' && remainingAttempts > 0) {
+          tryListen(remainingAttempts - 1);
+          return;
+        }
+
+        reject(error);
+      });
+
+      server.listen(port, '127.0.0.1', () => {
+        const url = `http://127.0.0.1:${port}/`;
+        try {
+          openHandler(url);
+        } catch (error) {
+          reject(error);
+          return;
+        }
+
+        resolve({
+          submitted,
+          server,
+          url,
+        });
+      });
+    };
+
+    tryListen(20);
+  });
 }
 
 function getClaudeDesktopConfigPath(platform = process.platform, env = process.env) {
@@ -196,8 +338,10 @@ async function main() {
   const message = resolvedConfigPath ? resolvedConfigPath : 'no Claude Desktop installation detected';
 
   try {
-    const dialogResult = await showDialog(message, resolvedConfigPath);
-    process.stdout.write(`${getConsoleSummary(dialogResult)}\n`);
+    const { submitted, url } = await startLocalServer(message, resolvedConfigPath);
+    process.stdout.write(`Open browser dialog at ${url}\n`);
+    const dialogResult = await submitted;
+    process.stdout.write(`${getConsoleSummary(resolvedConfigPath, dialogResult)}\n`);
   } catch (error) {
     process.stderr.write(`Unable to open dialog: ${error.message}\n`);
     process.exitCode = 1;
@@ -210,10 +354,13 @@ if (require.main === module) {
 
 module.exports = {
   buildDialogHtml,
+  createSubmitResponse,
   createDefaultFormValues,
   deriveEnvValues,
   getConsoleSummary,
   getClaudeDesktopConfigPath,
   isUrl,
+  openBrowser,
+  startLocalServer,
   main,
 };
