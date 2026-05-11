@@ -56,12 +56,54 @@ function getMcpServerKey(packageName) {
     .replace(/-mcp$/, '');
 }
 
-function buildClaudeDesktopConfigSuggestion(formValues) {
+function getClaudeDesktopBackupPath(configPath) {
+  if (!configPath) {
+    return null;
+  }
+
+  return path.join(path.dirname(configPath), 'claude_desktop_config_cpmcp_beckup.json');
+}
+
+function readClaudeDesktopConfig(configPath) {
+  if (!configPath || !fs.existsSync(configPath)) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function getPackageArgument(args) {
+  if (!Array.isArray(args)) {
+    return null;
+  }
+
+  return args.find((entry) => typeof entry === 'string' && entry.startsWith('@chkp/')) || null;
+}
+
+function buildClaudeDesktopConfigSuggestion(configPath, formValues) {
+  const existingConfig = readClaudeDesktopConfig(configPath);
   const envValues = deriveEnvValues(formValues);
   const selectedPackages = normalizeSelectedMcpServers(formValues && formValues.selectedMcpServers);
   const selectedPackageSet = new Set(selectedPackages);
   const selectedServers = getMcpServers().filter((server) => selectedPackageSet.has(server.npm_package));
-  const mcpServers = {};
+  const existingMcpServers = existingConfig && typeof existingConfig.mcpServers === 'object' && existingConfig.mcpServers
+    ? existingConfig.mcpServers
+    : {};
+  const mergedMcpServers = {};
+
+  for (const [serverKey, serverConfig] of Object.entries(existingMcpServers)) {
+    const packageArgument = getPackageArgument(serverConfig && serverConfig.args);
+
+    if (packageArgument && selectedPackageSet.has(packageArgument)) {
+      continue;
+    }
+
+    mergedMcpServers[serverKey] = serverConfig;
+  }
 
   for (const server of selectedServers) {
     const env = {};
@@ -70,7 +112,12 @@ function buildClaudeDesktopConfigSuggestion(formValues) {
       env[variableName] = envValues[variableName] || '';
     }
 
-    mcpServers[getMcpServerKey(server.npm_package)] = {
+    const existingEntry = Object.entries(existingMcpServers).find(([, serverConfig]) => {
+      return getPackageArgument(serverConfig && serverConfig.args) === server.npm_package;
+    });
+    const serverKey = existingEntry ? existingEntry[0] : getMcpServerKey(server.npm_package);
+
+    mergedMcpServers[serverKey] = {
       command: 'npx',
       args: [server.npm_package],
       env,
@@ -78,7 +125,11 @@ function buildClaudeDesktopConfigSuggestion(formValues) {
   }
 
   return {
-    mcpServers,
+    backupPath: getClaudeDesktopBackupPath(configPath),
+    mergedConfig: {
+      ...existingConfig,
+      mcpServers: mergedMcpServers,
+    },
   };
 }
 
@@ -187,7 +238,7 @@ function createSubmitResponse(configPath, formValues) {
     claudeDesktopConfig: configPath || 'no Claude Desktop installation detected',
     checkPointConfig: deriveEnvValues(formValues),
     selectedMcpServers: normalizeSelectedMcpServers(formValues && formValues.selectedMcpServers),
-    suggestedClaudeDesktopConfig: buildClaudeDesktopConfigSuggestion(formValues),
+    suggestedClaudeDesktopConfig: buildClaudeDesktopConfigSuggestion(configPath, formValues),
   };
 }
 
@@ -248,6 +299,7 @@ function buildDialogHtml(message, configPath) {
     '.result.is-visible { display: block; }',
     '.result h2 { margin: 0 0 10px; font-size: 18px; line-height: 1.25; }',
     '.result-block { margin: 0 0 14px; padding: 14px 16px; border-radius: 14px; background: #f7f9fc; border: 1px solid #e3e8ef; color: #222934; font-size: 14px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }',
+    '.result-code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-size: 13px; }',
     '.result-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }',
     '.result-actions .summary { margin: 0; }',
     '.actions { display: flex; justify-content: flex-end; margin-top: 20px; }',
@@ -301,7 +353,7 @@ function buildDialogHtml(message, configPath) {
     '<div id="claude-result" class="result-block"></div>',
     '<div id="checkpoint-result" class="result-block"></div>',
     '<div id="selected-mcp-result" class="result-block"></div>',
-    '<div id="suggested-config-result" class="result-block"></div>',
+    '<div id="suggested-config-result" class="result-block result-code"></div>',
     '<div class="result-actions">',
     '<p class="summary">You can now close this page.</p>',
     '<button id="close-page-button" class="close-page-button" type="button">',
@@ -437,10 +489,12 @@ function buildDialogHtml(message, configPath) {
     '    const checkPointConfig = data.checkPointConfig || {};',
     '    const selectedMcpServers = Array.isArray(data.selectedMcpServers) ? data.selectedMcpServers : [];',
     '    const suggestedClaudeDesktopConfig = data.suggestedClaudeDesktopConfig || {};',
+    '    const suggestedBackupPath = suggestedClaudeDesktopConfig.backupPath || "";',
+    '    const mergedConfig = suggestedClaudeDesktopConfig.mergedConfig || {};',
     '    claudeResult.textContent = `Claude Desktop config is:\n${data.claudeDesktopConfig || "no Claude Desktop installation detected"}`;',
     '    checkpointResult.textContent = `Check Point config is:\nS1C_URL: ${checkPointConfig.S1C_URL || ""}\nMANAGEMENT_HOST: ${checkPointConfig.MANAGEMENT_HOST || ""}\nAPI_KEY: ${checkPointConfig.API_KEY || ""}\nUSERNAME: ${checkPointConfig.USERNAME || ""}\nPASSWORD: ${checkPointConfig.PASSWORD || ""}`;',
     '    selectedMcpResult.textContent = `Selected MCP servers:\n${selectedMcpServers.length ? selectedMcpServers.join("\\n") : ""}`;',
-    '    suggestedConfigResult.textContent = `Suggested claude_desktop_config.json:\n${JSON.stringify(suggestedClaudeDesktopConfig, null, 2)}`;',
+    '    suggestedConfigResult.textContent = `Backup copy path:\n${suggestedBackupPath || "no Claude Desktop installation detected"}\n\nSuggested claude_desktop_config.json:\n${JSON.stringify(mergedConfig, null, 2)}`;',
     '    fields.style.display = "none";',
     '    actions.style.display = "none";',
     '    status.textContent = "";',
