@@ -182,6 +182,26 @@ function applyClaudeDesktopConfig(configPath, formValues) {
   return suggestion;
 }
 
+function getApplyErrorMessage(error, configPath, platform = process.platform) {
+  const fallbackMessage = 'Unable to apply configuration';
+
+  if (!error || typeof error !== 'object') {
+    return fallbackMessage;
+  }
+
+  if (platform === 'win32' && ['EPERM', 'EBUSY', 'EACCES'].includes(error.code)) {
+    return [
+      `Unable to apply configuration: Windows reported ${error.code} while updating ${configPath || 'the Claude Desktop config file'}.`,
+      'This usually means the file is still in use by Claude Desktop or another process.',
+      'Close Claude Desktop and try again.',
+    ].join(' ');
+  }
+
+  return error.message
+    ? `Unable to apply configuration: ${error.message}`
+    : fallbackMessage;
+}
+
 function createDefaultFormValues() {
   return {
     managementServer: '',
@@ -544,6 +564,22 @@ function buildDialogHtml(message, configPath) {
     '  } catch {}',
     '  return isValidIpAddress(normalizedValue) || isValidHostname(normalizedValue);',
     '}',
+    'async function getResponseError(response, fallbackMessage) {',
+    '  try {',
+    '    const responseBody = await response.json();',
+    '    if (responseBody && typeof responseBody.error === "string" && responseBody.error) {',
+    '      return responseBody.error;',
+    '    }',
+    '  } catch {}',
+    '  return fallbackMessage;',
+    '}',
+    'function showApplyError(message) {',
+    '  resultTitle.textContent = "Apply failed";',
+    '  applySummaryResult.textContent = `Apply failed:\n\n${message}`;',
+    '  applySummaryResult.classList.remove("is-hidden");',
+    '  result.classList.add("is-visible");',
+    '  status.textContent = "";',
+    '}',
     'function updateManagementServerState() {',
     '  const isValid = isValidManagementServerInput(managementServerInput.value);',
     '  managementServerInput.classList.toggle("is-invalid", Boolean(managementServerInput.value) && !isValid);',
@@ -592,7 +628,7 @@ function buildDialogHtml(message, configPath) {
     '      body: JSON.stringify(payload)',
     '    });',
     '    if (!response.ok) {',
-    '      throw new Error(`Request failed: ${response.status}`);',
+    '      throw new Error(await getResponseError(response, `Request failed: ${response.status}`));',
     '    }',
     '    const data = await response.json();',
     '    const checkPointConfig = data.checkPointConfig || {};',
@@ -635,7 +671,7 @@ function buildDialogHtml(message, configPath) {
     '      body: JSON.stringify(lastSubmittedPayload)',
     '    });',
     '    if (!response.ok) {',
-    '      throw new Error(`Request failed: ${response.status}`);',
+    '      throw new Error(await getResponseError(response, `Request failed: ${response.status}`));',
     '    }',
     '    const data = await response.json();',
     '    const appliedClaudeDesktopConfig = data.appliedClaudeDesktopConfig || {};',
@@ -651,7 +687,7 @@ function buildDialogHtml(message, configPath) {
     '  } catch (error) {',
     '    applyButton.disabled = false;',
     '    closePageButton.disabled = false;',
-    '    status.textContent = `Apply failed: ${error.message}`;',
+    '    showApplyError(error.message);',
     '  }',
     '});',
     'closePageButton.addEventListener("click", () => {',
@@ -709,6 +745,32 @@ function openBrowser(url) {
   }
 
   spawn('xdg-open', [url], { detached: true, stdio: 'ignore' }).unref();
+}
+
+function getWindowsClaudeDesktopConfigCandidates(env = process.env, homeDirectory = os.homedir()) {
+  const appDataDirectory = env.APPDATA || path.win32.join(homeDirectory, 'AppData', 'Roaming');
+  const localAppDataDirectory = env.LOCALAPPDATA || path.win32.join(homeDirectory, 'AppData', 'Local');
+  const candidates = [
+    path.win32.join(appDataDirectory, 'Claude', 'claude_desktop_config.json'),
+  ];
+  const packagesDirectory = path.win32.join(localAppDataDirectory, 'Packages');
+
+  try {
+    const packageCandidates = fs.readdirSync(packagesDirectory, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && /^Claude_/i.test(entry.name))
+      .map((entry) => path.win32.join(
+        packagesDirectory,
+        entry.name,
+        'LocalCache',
+        'Roaming',
+        'Claude',
+        'claude_desktop_config.json'
+      ));
+
+    candidates.push(...packageCandidates);
+  } catch {}
+
+  return candidates;
 }
 
 function startLocalServer(message, configPath, openHandler = openBrowser) {
@@ -780,9 +842,13 @@ function startLocalServer(message, configPath, openHandler = openBrowser) {
               if (requestUrl.pathname === '/api/apply') {
                 server.close(() => finishSubmission(parsedBody));
               }
-            } catch {
+            } catch (error) {
               response.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-              response.end(JSON.stringify({ error: requestUrl.pathname === '/api/apply' ? 'Unable to apply configuration' : 'Invalid JSON payload' }));
+              response.end(JSON.stringify({
+                error: requestUrl.pathname === '/api/apply'
+                  ? getApplyErrorMessage(error, configPath)
+                  : 'Invalid JSON payload'
+              }));
             }
           });
 
@@ -837,9 +903,8 @@ function getClaudeDesktopConfigPath(platform = process.platform, env = process.e
   }
 
   if (platform === 'win32') {
-    const appDataDirectory = env.APPDATA || path.win32.join(homeDirectory, 'AppData', 'Roaming');
-
-    return path.win32.join(appDataDirectory, 'Claude', 'claude_desktop_config.json');
+    const candidates = getWindowsClaudeDesktopConfigCandidates(env, homeDirectory);
+    return candidates.find((candidatePath) => fs.existsSync(candidatePath)) || candidates[0] || null;
   }
 
   return null;

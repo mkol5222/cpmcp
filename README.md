@@ -34,6 +34,7 @@ node bin/cpmcp.js
 
 - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
 - Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+- Windows packaged install: `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\claude_desktop_config.json`
 
 If no Claude Desktop config is found, the UI shows `no Claude Desktop installation detected` and apply is blocked.
 
@@ -85,6 +86,7 @@ claude_desktop_config_cpmcp_beckup.json
 - The preview page lists replaced MCPs by section name and npm package under `MCPs replaced`.
 - The config preview highlights added or replaced MCP sections with a bright yellow-green background.
 - Clicking `Apply changes` writes the backup file first, then writes the merged `claude_desktop_config.json`.
+- If apply fails, the UI shows the underlying error message instead of a generic failure.
 - After apply, the page shows a summary and reminds you to restart Claude Desktop for the changes to take effect.
 
 ## Console output
