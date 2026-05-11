@@ -1,6 +1,6 @@
 # cpmcp
 
-Minimal CLI for locating the Claude Desktop config file.
+Minimal CLI for locating the Claude Desktop config file and presenting the result in a local dialog.
 
 ## Usage
 
@@ -14,8 +14,10 @@ npx -y github:mkol5222/cpmcp
 
 - On macOS, checks `~/Library/Application Support/Claude/claude_desktop_config.json`.
 - On Windows, checks `%APPDATA%\Claude\claude_desktop_config.json`.
-- If the file exists, prints the full path.
-- If the file does not exist, prints `no Claude Desktop installation detected`.
+- Opens a local `glimpseui` dialog with an embedded Check Point inspired interface and an `OK` button.
+- All page resources are embedded directly in the HTML. No external images, fonts, or network resources are loaded by the page.
+- If the file exists, the dialog shows the full path and the CLI also prints it to stdout after the dialog closes.
+- If the file does not exist, the dialog shows `no Claude Desktop installation detected` and the CLI prints the same text after the dialog closes.
 
 ## Development
 

@@ -16,5 +16,8 @@
   "files": [
     "bin/"
   ],
-  "license": "UNLICENSED"
+  "license": "UNLICENSED",
+  "dependencies": {
+    "glimpseui": "^0.8.0"
+  }
 }
