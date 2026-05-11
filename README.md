@@ -4,10 +4,10 @@ Minimal CLI for locating the Claude Desktop config file.
 
 ## Usage
 
-Run directly from npm:
+Run directly from GitHub:
 
 ```sh
-npx -y cpmcp
+npx -y github:mkol5222/cpmcp
 ```
 
 ## Current behavior
