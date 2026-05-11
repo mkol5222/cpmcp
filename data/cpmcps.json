@@ -1,0 +1,44 @@
+[
+  {
+    "npm_package": "@chkp/quantum-management-mcp",
+    "name": "Quantum Management",
+    "description": "Query and visualize policies, rulebases, access/NAT/VPN rules, and network objects from Check Point management servers.",
+    "env_vars": ["S1C_URL", "MANAGEMENT_HOST", "API_KEY", "USERNAME", "PASSWORD"]
+  },
+  {
+    "npm_package": "@chkp/management-logs-mcp",
+    "name": "Management Logs",
+    "description": "Query and analyze connection, audit, and monitoring logs from Check Point management servers.",
+    "env_vars": ["S1C_URL", "MANAGEMENT_HOST", "API_KEY", "USERNAME", "PASSWORD"]
+  },
+  {
+    "npm_package": "@chkp/threat-prevention-mcp",
+    "name": "Threat Prevention",
+    "description": "Manage and inspect threat protections, IPS blade status, protection profiles, and IOC feeds.",
+    "env_vars": ["S1C_URL", "MANAGEMENT_HOST", "API_KEY", "USERNAME", "PASSWORD"]
+  },
+  {
+    "npm_package": "@chkp/https-inspection-mcp",
+    "name": "HTTPS Inspection",
+    "description": "Query and analyze HTTPS inspection rulebases, layers, and gateway SSL/TLS inspection policies.",
+    "env_vars": ["S1C_URL", "MANAGEMENT_HOST", "API_KEY", "USERNAME", "PASSWORD"]
+  },
+  {
+    "npm_package": "@chkp/policy-insights-mcp",
+    "name": "Policy Insights",
+    "description": "Retrieve AI-generated policy insights — unused objects, overly permissive rules, and optimization suggestions — per layer and rule.",
+    "env_vars": ["S1C_URL", "MANAGEMENT_HOST", "API_KEY", "USERNAME", "PASSWORD"]
+  },
+  {
+    "npm_package": "@chkp/quantum-gw-cli-mcp",
+    "name": "Quantum Gateway CLI",
+    "description": "Run gateway CLI commands for hardware diagnostics, network configuration, HA monitoring, and SecureXL performance analysis.",
+    "env_vars": ["S1C_URL", "MANAGEMENT_HOST", "API_KEY", "USERNAME", "PASSWORD"]
+  },
+  {
+    "npm_package": "@chkp/quantum-gw-connection-analysis-mcp",
+    "name": "Gateway Connection Analysis",
+    "description": "Start and stop live connection debug sessions on a gateway to trace packet paths, NAT rules applied, and policy decisions.",
+    "env_vars": ["S1C_URL", "MANAGEMENT_HOST", "API_KEY", "USERNAME", "PASSWORD"]
+  }
+]

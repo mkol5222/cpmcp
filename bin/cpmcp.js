@@ -18,12 +18,44 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
+const MCP_SERVER_DATA_PATH = path.join(__dirname, '..', 'data', 'cpmcps.json');
+const DEFAULT_SELECTED_MCP_PACKAGES = new Set([
+  '@chkp/quantum-management-mcp',
+  '@chkp/management-logs-mcp',
+]);
+
+function getMcpServers() {
+  try {
+    const fileContents = fs.readFileSync(MCP_SERVER_DATA_PATH, 'utf8');
+    const parsedContents = JSON.parse(fileContents);
+    return Array.isArray(parsedContents) ? parsedContents : [];
+  } catch {
+    return [];
+  }
+}
+
+function normalizeSelectedMcpServers(value) {
+  const availablePackages = new Set(getMcpServers().map((server) => server.npm_package));
+  const selectedValues = Array.isArray(value)
+    ? value
+    : typeof value === 'string' && value
+      ? [value]
+      : [];
+
+  return selectedValues.filter((packageName, index) => {
+    return typeof packageName === 'string'
+      && availablePackages.has(packageName)
+      && selectedValues.indexOf(packageName) === index;
+  });
+}
+
 function createDefaultFormValues() {
   return {
     managementServer: '',
     apiKey: '',
     username: 'admin',
     password: 'demo123',
+    selectedMcpServers: Array.from(DEFAULT_SELECTED_MCP_PACKAGES),
   };
 }
 
@@ -40,9 +72,43 @@ function isUrl(value) {
   }
 }
 
+function normalizeWebApiUrl(value) {
+  const parsedUrl = new URL(value);
+  const webApiMatch = parsedUrl.pathname.match(/^(.*?\/web_api)(?:\/.*)?$/);
+
+  if (webApiMatch) {
+    parsedUrl.pathname = webApiMatch[1];
+    parsedUrl.search = '';
+    parsedUrl.hash = '';
+  }
+
+  return parsedUrl.toString();
+}
+
+function extractManagementServer(value) {
+  const trimmedValue = (value || '').trim();
+
+  if (!trimmedValue) {
+    return '';
+  }
+
+  const urlMatch = trimmedValue.match(/https?:\/\/[^\s"'<>]+/i);
+
+  if (urlMatch) {
+    try {
+      return normalizeWebApiUrl(urlMatch[0]);
+    } catch {
+      return urlMatch[0];
+    }
+  }
+
+  const firstLine = trimmedValue.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
+  return firstLine || '';
+}
+
 function deriveEnvValues(formValues) {
   const values = formValues || createDefaultFormValues();
-  const server = (values.managementServer || '').trim();
+  const server = extractManagementServer(values.managementServer);
   const apiKey = (values.apiKey || '').trim();
   const username = apiKey ? '' : (values.username || '').trim();
   const password = apiKey ? '' : (values.password || '').trim();
@@ -60,6 +126,7 @@ function createSubmitResponse(configPath, formValues) {
   return {
     claudeDesktopConfig: configPath || 'no Claude Desktop installation detected',
     checkPointConfig: deriveEnvValues(formValues),
+    selectedMcpServers: normalizeSelectedMcpServers(formValues && formValues.selectedMcpServers),
   };
 }
 
@@ -67,6 +134,20 @@ function buildDialogHtml(message, configPath) {
   const title = configPath ? 'Claude Desktop config detected' : 'Claude Desktop config not detected';
   const body = configPath ? configPath : message;
   const defaults = createDefaultFormValues();
+  const mcpServers = getMcpServers();
+  const mcpOptionsMarkup = mcpServers.map((server) => {
+    const isChecked = defaults.selectedMcpServers.includes(server.npm_package);
+
+    return [
+      `<label class="mcp-option" title="${escapeHtml(server.description)}">`,
+      `<input class="mcp-option-checkbox" type="checkbox" name="mcp-server" value="${escapeHtml(server.npm_package)}"${isChecked ? ' checked' : ''}>`,
+      '<span class="mcp-option-text">',
+      `<span class="mcp-option-package">${escapeHtml(server.npm_package)}</span>`,
+      `<span class="mcp-option-name">${escapeHtml(server.name)}</span>`,
+      '</span>',
+      '</label>',
+    ].join('');
+  }).join('');
 
   return [
     '<!DOCTYPE html>',
@@ -79,28 +160,37 @@ function buildDialogHtml(message, configPath) {
     ':root { color-scheme: light; }',
     '* { box-sizing: border-box; }',
     'body { margin: 0; min-height: 100vh; font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; background: #f5f7fa; color: #14181f; }',
-    '.shell { min-height: 100vh; display: grid; place-items: center; padding: 24px; }',
-    '.dialog { width: min(100%, 480px); border-radius: 20px; background: #ffffff; border: 1px solid #d8dde6; box-shadow: 0 18px 48px rgba(15, 22, 36, 0.14); padding: 24px; }',
+    '.shell { min-height: 100vh; display: grid; place-items: center; padding: 32px; }',
+    '.dialog { width: min(100%, 760px); border-radius: 20px; background: #ffffff; border: 1px solid #d8dde6; box-shadow: 0 18px 48px rgba(15, 22, 36, 0.14); padding: 28px; }',
     '.logo { display: block; width: 178px; height: auto; margin-bottom: 18px; }',
     'h1 { margin: 0 0 10px; font-size: 26px; line-height: 1.15; font-weight: 700; letter-spacing: -0.03em; }',
     '.summary { margin: 0 0 14px; color: #576171; font-size: 14px; line-height: 1.5; }',
-    '.path { margin: 0; padding: 14px 16px; border-radius: 14px; background: #f7f9fc; border: 1px solid #e3e8ef; color: #222934; font-size: 14px; line-height: 1.55; word-break: break-word; white-space: pre-wrap; }',
+    '.path { margin: 0; padding: 14px 16px; border-radius: 14px; background: #f7f9fc; border: 1px solid #e3e8ef; color: #222934; font-size: 14px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }',
     '.fields { display: grid; gap: 14px; margin-top: 18px; }',
     '.field { display: grid; gap: 6px; }',
     '.field label { color: #3b4452; font-size: 13px; font-weight: 700; }',
     '.field input { width: 100%; padding: 11px 12px; border: 1px solid #d2d9e4; border-radius: 12px; background: #ffffff; color: #14181f; font: inherit; }',
     '.field input::placeholder { color: #8a94a5; }',
     '.field-note { margin: 0; color: #707b8c; font-size: 12px; line-height: 1.4; }',
+    '.mcp-section { display: grid; gap: 10px; padding: 16px; border-radius: 16px; background: #fbfcfe; border: 1px solid #e3e8ef; }',
+    '.mcp-section-title { margin: 0; color: #222934; font-size: 14px; font-weight: 700; }',
+    '.mcp-list { display: grid; gap: 10px; }',
+    '.mcp-option { display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: start; padding: 12px 14px; border-radius: 14px; border: 1px solid #dce3ec; background: #ffffff; cursor: pointer; }',
+    '.mcp-option:hover { border-color: #b9c5d6; background: #f9fbfd; }',
+    '.mcp-option-checkbox { margin-top: 3px; width: 16px; height: 16px; accent-color: #e31b23; }',
+    '.mcp-option-text { display: grid; gap: 3px; min-width: 0; }',
+    '.mcp-option-package { color: #14181f; font-size: 14px; font-weight: 700; line-height: 1.45; overflow-wrap: anywhere; }',
+    '.mcp-option-name { color: #6b7483; font-size: 13px; line-height: 1.45; }',
     '.status { margin-top: 14px; color: #576171; font-size: 13px; line-height: 1.5; }',
     '.result { display: none; margin-top: 18px; padding-top: 18px; border-top: 1px solid #e3e8ef; }',
     '.result.is-visible { display: block; }',
     '.result h2 { margin: 0 0 10px; font-size: 18px; line-height: 1.25; }',
-    '.result-block { margin: 0 0 14px; padding: 14px 16px; border-radius: 14px; background: #f7f9fc; border: 1px solid #e3e8ef; color: #222934; font-size: 14px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }',
+    '.result-block { margin: 0 0 14px; padding: 14px 16px; border-radius: 14px; background: #f7f9fc; border: 1px solid #e3e8ef; color: #222934; font-size: 14px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }',
     '.actions { display: flex; justify-content: flex-end; margin-top: 20px; }',
     'button { appearance: none; border: 0; border-radius: 999px; padding: 11px 20px; min-width: 92px; background: #e31b23; color: #ffffff; font: inherit; font-weight: 700; cursor: pointer; }',
     'button:disabled { opacity: 0.65; cursor: progress; }',
     'button:focus-visible { outline: 3px solid rgba(237, 28, 36, 0.28); outline-offset: 3px; }',
-    '@media (max-width: 520px) { .dialog { padding: 20px; } h1 { font-size: 23px; } }',
+    '@media (max-width: 520px) { .shell { padding: 16px; } .dialog { padding: 20px; } h1 { font-size: 23px; } }',
     '</style>',
     '</head>',
     '<body>',
@@ -127,6 +217,13 @@ function buildDialogHtml(message, configPath) {
     '<label for="password">Password</label>',
     `<input id="password" type="password" value="${escapeHtml(defaults.password)}">`,
     '</div>',
+    '<div class="mcp-section">',
+    '<p class="mcp-section-title">MCP servers</p>',
+    '<div class="mcp-list">',
+    mcpOptionsMarkup,
+    '</div>',
+    '<p class="field-note">Hover over a server to see its full description.</p>',
+    '</div>',
     '<p class="field-note">API key overrides username and password when provided.</p>',
     '</div>',
     '<p id="status" class="status"></p>',
@@ -137,6 +234,7 @@ function buildDialogHtml(message, configPath) {
     '<h2>Configuration saved</h2>',
     '<div id="claude-result" class="result-block"></div>',
     '<div id="checkpoint-result" class="result-block"></div>',
+    '<div id="selected-mcp-result" class="result-block"></div>',
     '<p class="summary">You can now close this page.</p>',
     '</section>',
     '<script>',
@@ -147,6 +245,39 @@ function buildDialogHtml(message, configPath) {
     'const result = document.getElementById("result");',
     'const claudeResult = document.getElementById("claude-result");',
     'const checkpointResult = document.getElementById("checkpoint-result");',
+    'const selectedMcpResult = document.getElementById("selected-mcp-result");',
+    'const managementServerInput = document.getElementById("management-server");',
+    'function normalizeManagementServerInput(value) {',
+    '  const trimmedValue = value.trim();',
+    '  if (!trimmedValue) {',
+    '    return "";',
+    '  }',
+    '  const urlMatch = trimmedValue.match(/https?:\\/\\/[^\\s"\'<>]+/i);',
+    '  if (urlMatch) {',
+    '    try {',
+    '      const parsedUrl = new URL(urlMatch[0]);',
+    '      const webApiMatch = parsedUrl.pathname.match(/^(.*?\\/web_api)(?:\\/.*)?$/);',
+    '      if (webApiMatch) {',
+    '        parsedUrl.pathname = webApiMatch[1];',
+    '        parsedUrl.search = "";',
+    '        parsedUrl.hash = "";',
+    '      }',
+    '      return parsedUrl.toString();',
+    '    } catch {',
+    '      return urlMatch[0];',
+    '    }',
+    '  }',
+    '  const firstLine = trimmedValue.split(/\\r?\\n/).map((line) => line.trim()).find(Boolean);',
+    '  return firstLine || "";',
+    '}',
+    'managementServerInput.addEventListener("paste", () => {',
+    '  requestAnimationFrame(() => {',
+    '    managementServerInput.value = normalizeManagementServerInput(managementServerInput.value);',
+    '  });',
+    '});',
+    'managementServerInput.addEventListener("blur", () => {',
+    '  managementServerInput.value = normalizeManagementServerInput(managementServerInput.value);',
+    '});',
     'okButton.addEventListener("click", async () => {',
     '  okButton.disabled = true;',
     '  status.textContent = "Submitting...";',
@@ -154,7 +285,8 @@ function buildDialogHtml(message, configPath) {
     '    managementServer: document.getElementById("management-server").value,',
     '    apiKey: document.getElementById("api-key").value,',
     '    username: document.getElementById("username").value,',
-    '    password: document.getElementById("password").value',
+    '    password: document.getElementById("password").value,',
+    "    selectedMcpServers: Array.from(document.querySelectorAll('input[name=\"mcp-server\"]:checked')).map((input) => input.value)",
     '  };',
     '  try {',
     '    const response = await fetch("/api/submit", {',
@@ -167,8 +299,10 @@ function buildDialogHtml(message, configPath) {
     '    }',
     '    const data = await response.json();',
     '    const checkPointConfig = data.checkPointConfig || {};',
+    '    const selectedMcpServers = Array.isArray(data.selectedMcpServers) ? data.selectedMcpServers : [];',
     '    claudeResult.textContent = `Claude Desktop config is:\n${data.claudeDesktopConfig || "no Claude Desktop installation detected"}`;',
     '    checkpointResult.textContent = `Check Point config is:\nS1C_URL: ${checkPointConfig.S1C_URL || ""}\nMANAGEMENT_HOST: ${checkPointConfig.MANAGEMENT_HOST || ""}\nAPI_KEY: ${checkPointConfig.API_KEY || ""}\nUSERNAME: ${checkPointConfig.USERNAME || ""}\nPASSWORD: ${checkPointConfig.PASSWORD || ""}`;',
+    '    selectedMcpResult.textContent = `Selected MCP servers:\n${selectedMcpServers.length ? selectedMcpServers.join("\\n") : ""}`;',
     '    fields.style.display = "none";',
     '    actions.style.display = "none";',
     '    status.textContent = "";',
@@ -188,6 +322,7 @@ function buildDialogHtml(message, configPath) {
 
 function getConsoleSummary(configPath, dialogResult) {
   const envValues = deriveEnvValues(dialogResult || createDefaultFormValues());
+  const selectedMcpServers = normalizeSelectedMcpServers(dialogResult && dialogResult.selectedMcpServers);
 
   return [
     `CLAUDE_DESKTOP_CONFIG: ${configPath || 'no Claude Desktop installation detected'}`,
@@ -196,6 +331,7 @@ function getConsoleSummary(configPath, dialogResult) {
     `API_KEY: ${envValues.API_KEY}`,
     `USERNAME: ${envValues.USERNAME}`,
     `PASSWORD: ${envValues.PASSWORD}`,
+    `MCP_SERVERS: ${selectedMcpServers.join(',')}`,
   ].join('\n');
 }
 
@@ -357,9 +493,12 @@ module.exports = {
   createSubmitResponse,
   createDefaultFormValues,
   deriveEnvValues,
+  extractManagementServer,
+  getMcpServers,
   getConsoleSummary,
   getClaudeDesktopConfigPath,
   isUrl,
+  normalizeSelectedMcpServers,
   openBrowser,
   startLocalServer,
   main,

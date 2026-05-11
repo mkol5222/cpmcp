@@ -14,7 +14,8 @@
     "cpmcp": "bin/cpmcp.js"
   },
   "files": [
-    "bin/"
+    "bin/",
+    "data/"
   ],
   "license": "UNLICENSED"
 }
