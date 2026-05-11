@@ -50,6 +50,38 @@ function normalizeSelectedMcpServers(value) {
   });
 }
 
+function getMcpServerKey(packageName) {
+  return String(packageName || '')
+    .replace(/^@[^/]+\//, '')
+    .replace(/-mcp$/, '');
+}
+
+function buildClaudeDesktopConfigSuggestion(formValues) {
+  const envValues = deriveEnvValues(formValues);
+  const selectedPackages = normalizeSelectedMcpServers(formValues && formValues.selectedMcpServers);
+  const selectedPackageSet = new Set(selectedPackages);
+  const selectedServers = getMcpServers().filter((server) => selectedPackageSet.has(server.npm_package));
+  const mcpServers = {};
+
+  for (const server of selectedServers) {
+    const env = {};
+
+    for (const variableName of server.env_vars || []) {
+      env[variableName] = envValues[variableName] || '';
+    }
+
+    mcpServers[getMcpServerKey(server.npm_package)] = {
+      command: 'npx',
+      args: [server.npm_package],
+      env,
+    };
+  }
+
+  return {
+    mcpServers,
+  };
+}
+
 function createDefaultFormValues() {
   return {
     managementServer: '',
@@ -155,6 +187,7 @@ function createSubmitResponse(configPath, formValues) {
     claudeDesktopConfig: configPath || 'no Claude Desktop installation detected',
     checkPointConfig: deriveEnvValues(formValues),
     selectedMcpServers: normalizeSelectedMcpServers(formValues && formValues.selectedMcpServers),
+    suggestedClaudeDesktopConfig: buildClaudeDesktopConfigSuggestion(formValues),
   };
 }
 
@@ -268,6 +301,7 @@ function buildDialogHtml(message, configPath) {
     '<div id="claude-result" class="result-block"></div>',
     '<div id="checkpoint-result" class="result-block"></div>',
     '<div id="selected-mcp-result" class="result-block"></div>',
+    '<div id="suggested-config-result" class="result-block"></div>',
     '<div class="result-actions">',
     '<p class="summary">You can now close this page.</p>',
     '<button id="close-page-button" class="close-page-button" type="button">',
@@ -286,6 +320,7 @@ function buildDialogHtml(message, configPath) {
     'const claudeResult = document.getElementById("claude-result");',
     'const checkpointResult = document.getElementById("checkpoint-result");',
     'const selectedMcpResult = document.getElementById("selected-mcp-result");',
+    'const suggestedConfigResult = document.getElementById("suggested-config-result");',
     'const managementServerInput = document.getElementById("management-server");',
     'if ("scrollRestoration" in history) {',
     '  history.scrollRestoration = "manual";',
@@ -401,9 +436,11 @@ function buildDialogHtml(message, configPath) {
     '    const data = await response.json();',
     '    const checkPointConfig = data.checkPointConfig || {};',
     '    const selectedMcpServers = Array.isArray(data.selectedMcpServers) ? data.selectedMcpServers : [];',
+    '    const suggestedClaudeDesktopConfig = data.suggestedClaudeDesktopConfig || {};',
     '    claudeResult.textContent = `Claude Desktop config is:\n${data.claudeDesktopConfig || "no Claude Desktop installation detected"}`;',
     '    checkpointResult.textContent = `Check Point config is:\nS1C_URL: ${checkPointConfig.S1C_URL || ""}\nMANAGEMENT_HOST: ${checkPointConfig.MANAGEMENT_HOST || ""}\nAPI_KEY: ${checkPointConfig.API_KEY || ""}\nUSERNAME: ${checkPointConfig.USERNAME || ""}\nPASSWORD: ${checkPointConfig.PASSWORD || ""}`;',
     '    selectedMcpResult.textContent = `Selected MCP servers:\n${selectedMcpServers.length ? selectedMcpServers.join("\\n") : ""}`;',
+    '    suggestedConfigResult.textContent = `Suggested claude_desktop_config.json:\n${JSON.stringify(suggestedClaudeDesktopConfig, null, 2)}`;',
     '    fields.style.display = "none";',
     '    actions.style.display = "none";',
     '    status.textContent = "";',
