@@ -15,9 +15,14 @@ npx -y github:mkol5222/cpmcp
 - On macOS, checks `~/Library/Application Support/Claude/claude_desktop_config.json`.
 - On Windows, checks `%APPDATA%\Claude\claude_desktop_config.json`.
 - Opens a minimal local `glimpseui` dialog with the embedded Check Point SVG logo and an `OK` button.
+- The dialog includes `Management server`, `API key`, `Username`, and `Password` fields. `Username` defaults to `admin`, and `Password` defaults to `demo123`.
 - All page resources are embedded directly in the HTML. No external images, fonts, or network resources are loaded by the page.
-- If the file exists, the dialog shows the full path and the CLI prints `Claude Desktop config detected: <path>` after the dialog closes.
-- If the file does not exist, the dialog shows `no Claude Desktop installation detected` and the CLI prints the same text after the dialog closes.
+- If the file exists, the dialog shows the full path.
+- If the file does not exist, the dialog shows `no Claude Desktop installation detected`.
+- After the dialog closes, the CLI prints derived `S1C_URL`, `MANAGEMENT_HOST`, `API_KEY`, `USERNAME`, and `PASSWORD` values.
+- If `Management server` is a URL, it becomes `S1C_URL` and `MANAGEMENT_HOST` is empty.
+- If `Management server` is a hostname or IP, it becomes `MANAGEMENT_HOST` and `S1C_URL` is empty.
+- If `API key` is provided, `USERNAME` and `PASSWORD` are printed as empty values.
 
 ## Development
 

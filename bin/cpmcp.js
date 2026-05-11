@@ -15,9 +15,48 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
+function createDefaultFormValues() {
+  return {
+    managementServer: '',
+    apiKey: '',
+    username: 'admin',
+    password: 'demo123',
+  };
+}
+
+function isUrl(value) {
+  if (!value) {
+    return false;
+  }
+
+  try {
+    const parsedUrl = new URL(value);
+    return parsedUrl.protocol === 'http:' || parsedUrl.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function deriveEnvValues(formValues) {
+  const values = formValues || createDefaultFormValues();
+  const server = (values.managementServer || '').trim();
+  const apiKey = (values.apiKey || '').trim();
+  const username = apiKey ? '' : (values.username || '').trim();
+  const password = apiKey ? '' : (values.password || '').trim();
+
+  return {
+    S1C_URL: isUrl(server) ? server : '',
+    MANAGEMENT_HOST: server && !isUrl(server) ? server : '',
+    API_KEY: apiKey,
+    USERNAME: username,
+    PASSWORD: password,
+  };
+}
+
 function buildDialogHtml(message, configPath) {
   const title = configPath ? 'Claude Desktop config detected' : 'Claude Desktop config not detected';
   const body = configPath ? configPath : message;
+  const defaults = createDefaultFormValues();
 
   return [
     '<!DOCTYPE html>',
@@ -36,6 +75,12 @@ function buildDialogHtml(message, configPath) {
     'h1 { margin: 0 0 10px; font-size: 26px; line-height: 1.15; font-weight: 700; letter-spacing: -0.03em; }',
     '.summary { margin: 0 0 14px; color: #576171; font-size: 14px; line-height: 1.5; }',
     '.path { margin: 0; padding: 14px 16px; border-radius: 14px; background: #f7f9fc; border: 1px solid #e3e8ef; color: #222934; font-size: 14px; line-height: 1.55; word-break: break-word; white-space: pre-wrap; }',
+    '.fields { display: grid; gap: 14px; margin-top: 18px; }',
+    '.field { display: grid; gap: 6px; }',
+    '.field label { color: #3b4452; font-size: 13px; font-weight: 700; }',
+    '.field input { width: 100%; padding: 11px 12px; border: 1px solid #d2d9e4; border-radius: 12px; background: #ffffff; color: #14181f; font: inherit; }',
+    '.field input::placeholder { color: #8a94a5; }',
+    '.field-note { margin: 0; color: #707b8c; font-size: 12px; line-height: 1.4; }',
     '.actions { display: flex; justify-content: flex-end; margin-top: 20px; }',
     'button { appearance: none; border: 0; border-radius: 999px; padding: 11px 20px; min-width: 92px; background: #e31b23; color: #ffffff; font: inherit; font-weight: 700; cursor: pointer; }',
     'button:focus-visible { outline: 3px solid rgba(237, 28, 36, 0.28); outline-offset: 3px; }',
@@ -49,12 +94,37 @@ function buildDialogHtml(message, configPath) {
     `<h1 id="dialog-title">${escapeHtml(title)}</h1>`,
     '<p class="summary">Review the detected Claude Desktop configuration location below.</p>',
     `<pre class="path">${escapeHtml(body)}</pre>`,
+    '<div class="fields">',
+    '<div class="field">',
+    '<label for="management-server">Management server</label>',
+    '<input id="management-server" type="text" placeholder="IP, hostname or URL">',
+    '</div>',
+    '<div class="field">',
+    '<label for="api-key">API key</label>',
+    '<input id="api-key" type="text" placeholder="overrides username and password">',
+    '</div>',
+    '<div class="field">',
+    '<label for="username">Username</label>',
+    `<input id="username" type="text" value="${escapeHtml(defaults.username)}">`,
+    '</div>',
+    '<div class="field">',
+    '<label for="password">Password</label>',
+    `<input id="password" type="password" value="${escapeHtml(defaults.password)}">`,
+    '</div>',
+    '<p class="field-note">API key overrides username and password when provided.</p>',
+    '</div>',
     '<div class="actions">',
     '<button id="ok-button" type="button" autofocus>OK</button>',
     '</div>',
     '<script>',
     'document.getElementById("ok-button").addEventListener("click", () => {',
-    '  window.glimpse.send({ action: "ok" });',
+    '  window.glimpse.send({',
+    '    action: "ok",',
+    '    managementServer: document.getElementById("management-server").value,',
+    '    apiKey: document.getElementById("api-key").value,',
+    '    username: document.getElementById("username").value,',
+    '    password: document.getElementById("password").value',
+    '  });',
     '});',
     '</script>',
     '</main>',
@@ -67,30 +137,35 @@ function buildDialogHtml(message, configPath) {
 async function showDialog(message, configPath) {
   const { open } = await import('glimpseui');
 
-  await new Promise((resolve, reject) => {
+  return new Promise((resolve, reject) => {
     const win = open(buildDialogHtml(message, configPath), {
       width: 560,
-      height: 360,
+      height: 640,
       title: 'cpmcp',
     });
 
     win.once('message', (data) => {
       if (data && data.action === 'ok') {
         win.close();
+        resolve(data);
       }
     });
 
-    win.once('closed', resolve);
+    win.once('closed', () => resolve(null));
     win.once('error', reject);
   });
 }
 
-function getConsoleSummary(message, configPath) {
-  if (configPath) {
-    return `Claude Desktop config detected: ${configPath}`;
-  }
+function getConsoleSummary(dialogResult) {
+  const envValues = deriveEnvValues(dialogResult || createDefaultFormValues());
 
-  return message;
+  return [
+    `S1C_URL: ${envValues.S1C_URL}`,
+    `MANAGEMENT_HOST: ${envValues.MANAGEMENT_HOST}`,
+    `API_KEY: ${envValues.API_KEY}`,
+    `USERNAME: ${envValues.USERNAME}`,
+    `PASSWORD: ${envValues.PASSWORD}`,
+  ].join('\n');
 }
 
 function getClaudeDesktopConfigPath(platform = process.platform, env = process.env) {
@@ -121,8 +196,8 @@ async function main() {
   const message = resolvedConfigPath ? resolvedConfigPath : 'no Claude Desktop installation detected';
 
   try {
-    await showDialog(message, resolvedConfigPath);
-    process.stdout.write(`${getConsoleSummary(message, resolvedConfigPath)}\n`);
+    const dialogResult = await showDialog(message, resolvedConfigPath);
+    process.stdout.write(`${getConsoleSummary(dialogResult)}\n`);
   } catch (error) {
     process.stderr.write(`Unable to open dialog: ${error.message}\n`);
     process.exitCode = 1;
@@ -135,7 +210,10 @@ if (require.main === module) {
 
 module.exports = {
   buildDialogHtml,
+  createDefaultFormValues,
+  deriveEnvValues,
   getConsoleSummary,
   getClaudeDesktopConfigPath,
+  isUrl,
   main,
 };
