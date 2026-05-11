@@ -4,6 +4,7 @@ const { randomInt } = require('node:crypto');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const http = require('node:http');
+const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 
@@ -72,6 +73,32 @@ function isUrl(value) {
   }
 }
 
+function isValidIpAddress(value) {
+  return Boolean(value) && net.isIP(value) !== 0;
+}
+
+function isValidHostname(value) {
+  if (!value || value.length > 253) {
+    return false;
+  }
+
+  const hostnameLabels = value.split('.');
+
+  return hostnameLabels.every((label) => {
+    return /^[a-z0-9-]{1,63}$/i.test(label)
+      && !label.startsWith('-')
+      && !label.endsWith('-');
+  });
+}
+
+function isValidManagementServer(value) {
+  const normalizedValue = extractManagementServer(value);
+
+  return isUrl(normalizedValue)
+    || isValidIpAddress(normalizedValue)
+    || isValidHostname(normalizedValue);
+}
+
 function normalizeWebApiUrl(value) {
   const parsedUrl = new URL(value);
   const webApiMatch = parsedUrl.pathname.match(/^(.*?\/web_api)(?:\/.*)?$/);
@@ -112,10 +139,11 @@ function deriveEnvValues(formValues) {
   const apiKey = (values.apiKey || '').trim();
   const username = apiKey ? '' : (values.username || '').trim();
   const password = apiKey ? '' : (values.password || '').trim();
+  const isValidServer = isValidManagementServer(server);
 
   return {
-    S1C_URL: isUrl(server) ? server : '',
-    MANAGEMENT_HOST: server && !isUrl(server) ? server : '',
+    S1C_URL: isValidServer && isUrl(server) ? server : '',
+    MANAGEMENT_HOST: isValidServer && server && !isUrl(server) ? server : '',
     API_KEY: apiKey,
     USERNAME: username,
     PASSWORD: password,
@@ -170,6 +198,7 @@ function buildDialogHtml(message, configPath) {
     '.field { display: grid; gap: 6px; }',
     '.field label { color: #3b4452; font-size: 13px; font-weight: 700; }',
     '.field input { width: 100%; padding: 11px 12px; border: 1px solid #d2d9e4; border-radius: 12px; background: #ffffff; color: #14181f; font: inherit; }',
+    '.field input.is-invalid { border-color: #e31b23; box-shadow: 0 0 0 3px rgba(227, 27, 35, 0.12); }',
     '.field input::placeholder { color: #8a94a5; }',
     '.field-note { margin: 0; color: #707b8c; font-size: 12px; line-height: 1.4; }',
     '.mcp-section { display: grid; gap: 10px; padding: 16px; border-radius: 16px; background: #fbfcfe; border: 1px solid #e3e8ef; }',
@@ -277,15 +306,69 @@ function buildDialogHtml(message, configPath) {
     '  const firstLine = trimmedValue.split(/\\r?\\n/).map((line) => line.trim()).find(Boolean);',
     '  return firstLine || "";',
     '}',
+    'function isValidIpAddress(value) {',
+    '  if (!value) {',
+    '    return false;',
+    '  }',
+    '  const ipv4Parts = value.split(".");',
+    '  if (ipv4Parts.length === 4) {',
+    '    return ipv4Parts.every((part) => /^\\d{1,3}$/.test(part) && Number(part) >= 0 && Number(part) <= 255);',
+    '  }',
+    '  if (!value.includes(":")) {',
+    '    return false;',
+    '  }',
+    '  return /^[0-9a-f:]+$/i.test(value) && !value.includes(":::");',
+    '}',
+    'function isValidHostname(value) {',
+    '  if (!value || value.length > 253) {',
+    '    return false;',
+    '  }',
+    '  return value.split(".").every((label) => /^[a-z0-9-]{1,63}$/i.test(label) && !label.startsWith("-") && !label.endsWith("-"));',
+    '}',
+    'function isValidManagementServerInput(value) {',
+    '  const normalizedValue = normalizeManagementServerInput(value);',
+    '  if (!normalizedValue) {',
+    '    return false;',
+    '  }',
+    '  try {',
+    '    const parsedUrl = new URL(normalizedValue);',
+    '    if (parsedUrl.protocol === "http:" || parsedUrl.protocol === "https:") {',
+    '      return true;',
+    '    }',
+    '  } catch {}',
+    '  return isValidIpAddress(normalizedValue) || isValidHostname(normalizedValue);',
+    '}',
+    'function updateManagementServerState() {',
+    '  const isValid = isValidManagementServerInput(managementServerInput.value);',
+    '  managementServerInput.classList.toggle("is-invalid", Boolean(managementServerInput.value) && !isValid);',
+    '  managementServerInput.setAttribute("aria-invalid", String(Boolean(managementServerInput.value) && !isValid));',
+    '  okButton.disabled = !isValid;',
+    '  if (!isValid) {',
+    '    status.textContent = managementServerInput.value ? "Enter a valid URL, IP, or hostname." : "Enter a management server URL, IP, or hostname.";',
+    '    return false;',
+    '  }',
+    '  if (!status.textContent.startsWith("Submission failed:")) {',
+    '    status.textContent = "";',
+    '  }',
+    '  return true;',
+    '}',
     'managementServerInput.addEventListener("paste", () => {',
     '  requestAnimationFrame(() => {',
     '    managementServerInput.value = normalizeManagementServerInput(managementServerInput.value);',
+    '    updateManagementServerState();',
     '  });',
+    '});',
+    'managementServerInput.addEventListener("input", () => {',
+    '  updateManagementServerState();',
     '});',
     'managementServerInput.addEventListener("blur", () => {',
     '  managementServerInput.value = normalizeManagementServerInput(managementServerInput.value);',
+    '  updateManagementServerState();',
     '});',
     'okButton.addEventListener("click", async () => {',
+    '  if (!updateManagementServerState()) {',
+    '    return;',
+    '  }',
     '  okButton.disabled = true;',
     '  status.textContent = "Submitting...";',
     '  const payload = {',
@@ -315,10 +398,11 @@ function buildDialogHtml(message, configPath) {
     '    status.textContent = "";',
     '    result.classList.add("is-visible");',
     '  } catch (error) {',
-    '    okButton.disabled = false;',
+    '    updateManagementServerState();',
     '    status.textContent = `Submission failed: ${error.message}`;',
     '  }',
     '});',
+    'updateManagementServerState();',
     '</script>',
     '</main>',
     '</div>',
@@ -406,6 +490,11 @@ function startLocalServer(message, configPath, openHandler = openBrowser) {
           request.on('end', () => {
             try {
               const parsedBody = JSON.parse(bodyBuffer || '{}');
+              if (!isValidManagementServer(parsedBody.managementServer)) {
+                response.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+                response.end(JSON.stringify({ error: 'Invalid management server value' }));
+                return;
+              }
               const responsePayload = createSubmitResponse(configPath, parsedBody);
               response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
               response.end(JSON.stringify(responsePayload));
@@ -504,6 +593,9 @@ module.exports = {
   getMcpServers,
   getConsoleSummary,
   getClaudeDesktopConfigPath,
+  isValidHostname,
+  isValidIpAddress,
+  isValidManagementServer,
   isUrl,
   normalizeSelectedMcpServers,
   openBrowser,
