@@ -94,6 +94,8 @@ function buildClaudeDesktopConfigSuggestion(configPath, formValues) {
     ? existingConfig.mcpServers
     : {};
   const mergedMcpServers = {};
+  const highlightedServerKeys = [];
+  const replacedMcpServers = [];
 
   for (const [serverKey, serverConfig] of Object.entries(existingMcpServers)) {
     const packageArgument = getPackageArgument(serverConfig && serverConfig.args);
@@ -117,20 +119,67 @@ function buildClaudeDesktopConfigSuggestion(configPath, formValues) {
     });
     const serverKey = existingEntry ? existingEntry[0] : getMcpServerKey(server.npm_package);
 
+    if (existingEntry) {
+      replacedMcpServers.push({
+        sectionName: serverKey,
+        npmPackage: server.npm_package,
+      });
+    }
+
     mergedMcpServers[serverKey] = {
       command: 'npx',
       args: [server.npm_package],
       env,
     };
+    highlightedServerKeys.push(serverKey);
   }
 
   return {
     backupPath: getClaudeDesktopBackupPath(configPath),
+    highlightedServerKeys,
+    replacedMcpServers,
     mergedConfig: {
       ...existingConfig,
       mcpServers: mergedMcpServers,
     },
   };
+}
+
+function writeJsonFile(targetPath, data) {
+  const temporaryPath = `${targetPath}.tmp-${process.pid}-${Date.now()}`;
+  fs.writeFileSync(temporaryPath, `${JSON.stringify(data, null, 2)}\n`, {
+    encoding: 'utf8',
+    mode: 0o600,
+  });
+  fs.renameSync(temporaryPath, targetPath);
+}
+
+function writeTextFile(targetPath, data) {
+  const temporaryPath = `${targetPath}.tmp-${process.pid}-${Date.now()}`;
+  fs.writeFileSync(temporaryPath, data, {
+    encoding: 'utf8',
+    mode: 0o600,
+  });
+  fs.renameSync(temporaryPath, targetPath);
+}
+
+function applyClaudeDesktopConfig(configPath, formValues) {
+  if (!configPath) {
+    throw new Error('No Claude Desktop installation detected');
+  }
+
+  const existingFileContents = fs.existsSync(configPath)
+    ? fs.readFileSync(configPath, 'utf8')
+    : '{}\n';
+  const suggestion = buildClaudeDesktopConfigSuggestion(configPath, formValues);
+
+  if (suggestion.backupPath) {
+    writeTextFile(suggestion.backupPath, existingFileContents);
+  }
+
+  writeJsonFile(configPath, suggestion.mergedConfig);
+
+  return suggestion;
 }
 
 function createDefaultFormValues() {
@@ -242,6 +291,17 @@ function createSubmitResponse(configPath, formValues) {
   };
 }
 
+function createApplyResponse(configPath, formValues) {
+  const appliedClaudeDesktopConfig = applyClaudeDesktopConfig(configPath, formValues);
+
+  return {
+    claudeDesktopConfig: configPath || 'no Claude Desktop installation detected',
+    selectedMcpServers: normalizeSelectedMcpServers(formValues && formValues.selectedMcpServers),
+    appliedClaudeDesktopConfig,
+    message: 'Restart Claude Desktop for changes to take effect.',
+  };
+}
+
 function buildDialogHtml(message, configPath) {
   const title = configPath ? 'Claude Desktop config detected' : 'Claude Desktop config not detected';
   const body = configPath ? configPath : message;
@@ -298,12 +358,15 @@ function buildDialogHtml(message, configPath) {
     '.result { display: none; margin-top: 18px; padding-top: 18px; border-top: 1px solid #e3e8ef; }',
     '.result.is-visible { display: block; }',
     '.result h2 { margin: 0 0 10px; font-size: 18px; line-height: 1.25; }',
+    '.result-block.is-hidden { display: none; }',
     '.result-block { margin: 0 0 14px; padding: 14px 16px; border-radius: 14px; background: #f7f9fc; border: 1px solid #e3e8ef; color: #222934; font-size: 14px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }',
     '.result-code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-size: 13px; }',
+    '.config-highlight { display: block; margin: 0 -4px; padding: 1px 4px; border-radius: 4px; background: #e7ff63; box-shadow: inset 0 0 0 1px rgba(158, 181, 0, 0.22); }',
     '.result-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }',
-    '.result-actions .summary { margin: 0; }',
+    '.result-action-buttons { display: flex; gap: 10px; flex-wrap: wrap; }',
     '.actions { display: flex; justify-content: flex-end; margin-top: 20px; }',
     'button { appearance: none; border: 0; border-radius: 999px; padding: 11px 20px; min-width: 92px; background: #e31b23; color: #ffffff; font: inherit; font-weight: 700; cursor: pointer; }',
+    '.apply-button { background: #2d9c44; }',
     '.close-page-button { display: inline-flex; align-items: center; gap: 8px; min-width: 0; padding: 10px 16px; }',
     '.close-page-button-icon { font-size: 16px; line-height: 1; }',
     'button:disabled { opacity: 0.65; cursor: progress; }',
@@ -349,31 +412,40 @@ function buildDialogHtml(message, configPath) {
     '<button id="ok-button" type="button" autofocus>OK</button>',
     '</div>',
     '<section id="result" class="result" aria-live="polite">',
-    '<h2>Configuration saved</h2>',
+    '<h2 id="result-title">Configuration preview</h2>',
     '<div id="claude-result" class="result-block"></div>',
     '<div id="checkpoint-result" class="result-block"></div>',
     '<div id="selected-mcp-result" class="result-block"></div>',
     '<div id="suggested-config-result" class="result-block result-code"></div>',
+    '<div id="replaced-mcp-result" class="result-block"></div>',
+    '<div id="apply-summary-result" class="result-block is-hidden"></div>',
     '<div class="result-actions">',
-    '<p class="summary">You can now close this page.</p>',
+    '<div class="result-action-buttons">',
+    '<button id="apply-button" class="apply-button" type="button">Apply changes</button>',
     '<button id="close-page-button" class="close-page-button" type="button">',
     '<span class="close-page-button-icon" aria-hidden="true">x</span>',
     '<span>Close page</span>',
     '</button>',
     '</div>',
+    '</div>',
     '</section>',
     '<script>',
     'const okButton = document.getElementById("ok-button");',
+    'const applyButton = document.getElementById("apply-button");',
     'const closePageButton = document.getElementById("close-page-button");',
     'const status = document.getElementById("status");',
     'const fields = document.querySelector(".fields");',
     'const actions = document.querySelector(".actions");',
     'const result = document.getElementById("result");',
+    'const resultTitle = document.getElementById("result-title");',
     'const claudeResult = document.getElementById("claude-result");',
     'const checkpointResult = document.getElementById("checkpoint-result");',
     'const selectedMcpResult = document.getElementById("selected-mcp-result");',
     'const suggestedConfigResult = document.getElementById("suggested-config-result");',
+    'const replacedMcpResult = document.getElementById("replaced-mcp-result");',
+    'const applySummaryResult = document.getElementById("apply-summary-result");',
     'const managementServerInput = document.getElementById("management-server");',
+    'let lastSubmittedPayload = null;',
     'if ("scrollRestoration" in history) {',
     '  history.scrollRestoration = "manual";',
     '}',
@@ -381,6 +453,42 @@ function buildDialogHtml(message, configPath) {
     '  window.scrollTo(0, 0);',
     '  managementServerInput.focus();',
     '});',
+    'function escapeHtml(value) {',
+    '  return String(value)',
+    '    .replace(/&/g, "&amp;")',
+    '    .replace(/</g, "&lt;")',
+    '    .replace(/>/g, "&gt;")',
+    '    .replace(/\"/g, "&quot;")',
+    '    .replace(/\'/g, "&#39;");',
+    '}',
+    'function renderConfigValue(value, indentLevel, highlightedServerKeys, mcpDepth) {',
+    '  const indent = "  ".repeat(indentLevel);',
+    '  const nextIndent = "  ".repeat(indentLevel + 1);',
+    '  if (Array.isArray(value)) {',
+    '    if (!value.length) {',
+    '      return "[]";',
+    '    }',
+    '    return `[\\n${value.map((item) => `${nextIndent}${renderConfigValue(item, indentLevel + 1, highlightedServerKeys, mcpDepth)}`).join(",\\n")}\\n${indent}]`;',
+    '  }',
+    '  if (value && typeof value === "object") {',
+    '    const entries = Object.entries(value);',
+    '    if (!entries.length) {',
+    '      return "{}";',
+    '    }',
+    '    return `{\\n${entries.map(([key, entryValue]) => {',
+    '      const renderedEntry = `${nextIndent}${JSON.stringify(key)}: ${renderConfigValue(entryValue, indentLevel + 1, highlightedServerKeys, key === "mcpServers" ? indentLevel + 1 : mcpDepth)}`;',
+    '      const shouldHighlight = mcpDepth !== null && indentLevel === mcpDepth && highlightedServerKeys.has(key);',
+    '      if (!shouldHighlight) {',
+    '        return renderedEntry;',
+    '      }',
+    '      return `<span class="config-highlight">${renderedEntry}</span>`;',
+    '    }).join(",\\n")}\\n${indent}}`;',
+    '  }',
+    '  return escapeHtml(JSON.stringify(value));',
+    '}',
+    'function renderHighlightedConfig(config, highlightedServerKeys) {',
+    '  return renderConfigValue(config, 0, new Set(highlightedServerKeys || []), null);',
+    '}',
     'function normalizeManagementServerInput(value) {',
     '  const trimmedValue = value.trim();',
     '  if (!trimmedValue) {',
@@ -476,6 +584,7 @@ function buildDialogHtml(message, configPath) {
     '    password: document.getElementById("password").value,',
     "    selectedMcpServers: Array.from(document.querySelectorAll('input[name=\"mcp-server\"]:checked')).map((input) => input.value)",
     '  };',
+    '  lastSubmittedPayload = payload;',
     '  try {',
     '    const response = await fetch("/api/submit", {',
     '      method: "POST",',
@@ -490,11 +599,18 @@ function buildDialogHtml(message, configPath) {
     '    const selectedMcpServers = Array.isArray(data.selectedMcpServers) ? data.selectedMcpServers : [];',
     '    const suggestedClaudeDesktopConfig = data.suggestedClaudeDesktopConfig || {};',
     '    const suggestedBackupPath = suggestedClaudeDesktopConfig.backupPath || "";',
+    '    const highlightedServerKeys = Array.isArray(suggestedClaudeDesktopConfig.highlightedServerKeys) ? suggestedClaudeDesktopConfig.highlightedServerKeys : [];',
+    '    const replacedMcpServers = Array.isArray(suggestedClaudeDesktopConfig.replacedMcpServers) ? suggestedClaudeDesktopConfig.replacedMcpServers : [];',
     '    const mergedConfig = suggestedClaudeDesktopConfig.mergedConfig || {};',
+    '    resultTitle.textContent = "Configuration preview";',
     '    claudeResult.textContent = `Claude Desktop config is:\n${data.claudeDesktopConfig || "no Claude Desktop installation detected"}`;',
     '    checkpointResult.textContent = `Check Point config is:\nS1C_URL: ${checkPointConfig.S1C_URL || ""}\nMANAGEMENT_HOST: ${checkPointConfig.MANAGEMENT_HOST || ""}\nAPI_KEY: ${checkPointConfig.API_KEY || ""}\nUSERNAME: ${checkPointConfig.USERNAME || ""}\nPASSWORD: ${checkPointConfig.PASSWORD || ""}`;',
     '    selectedMcpResult.textContent = `Selected MCP servers:\n${selectedMcpServers.length ? selectedMcpServers.join("\\n") : ""}`;',
-    '    suggestedConfigResult.textContent = `Backup copy path:\n${suggestedBackupPath || "no Claude Desktop installation detected"}\n\nSuggested claude_desktop_config.json:\n${JSON.stringify(mergedConfig, null, 2)}`;',
+    '    suggestedConfigResult.innerHTML = `Backup copy path:\n${escapeHtml(suggestedBackupPath || "no Claude Desktop installation detected")}\n\nSuggested claude_desktop_config.json:\n${renderHighlightedConfig(mergedConfig, highlightedServerKeys)}`;',
+    '    replacedMcpResult.textContent = `MCPs replaced:\n${replacedMcpServers.length ? replacedMcpServers.map((server) => `${server.sectionName}: ${server.npmPackage}`).join("\\n") : "none"}`;',
+    '    applySummaryResult.classList.add("is-hidden");',
+    '    applyButton.style.display = "inline-flex";',
+    '    applyButton.disabled = false;',
     '    fields.style.display = "none";',
     '    actions.style.display = "none";',
     '    status.textContent = "";',
@@ -504,7 +620,42 @@ function buildDialogHtml(message, configPath) {
     '    status.textContent = `Submission failed: ${error.message}`;',
     '  }',
     '});',
+    'applyButton.addEventListener("click", async () => {',
+    '  if (!lastSubmittedPayload) {',
+    '    status.textContent = "Preview the configuration before applying changes.";',
+    '    return;',
+    '  }',
+    '  applyButton.disabled = true;',
+    '  closePageButton.disabled = true;',
+    '  status.textContent = "Applying changes...";',
+    '  try {',
+    '    const response = await fetch("/api/apply", {',
+    '      method: "POST",',
+    '      headers: { "Content-Type": "application/json" },',
+    '      body: JSON.stringify(lastSubmittedPayload)',
+    '    });',
+    '    if (!response.ok) {',
+    '      throw new Error(`Request failed: ${response.status}`);',
+    '    }',
+    '    const data = await response.json();',
+    '    const appliedClaudeDesktopConfig = data.appliedClaudeDesktopConfig || {};',
+    '    const appliedBackupPath = appliedClaudeDesktopConfig.backupPath || "";',
+    '    const appliedReplacedMcpServers = Array.isArray(appliedClaudeDesktopConfig.replacedMcpServers) ? appliedClaudeDesktopConfig.replacedMcpServers : [];',
+    '    const appliedSelectedMcpServers = Array.isArray(data.selectedMcpServers) ? data.selectedMcpServers : [];',
+    '    resultTitle.textContent = "Changes applied";',
+    '    applySummaryResult.textContent = `Changes were written to Claude Desktop.\n\nConfig path:\n${data.claudeDesktopConfig || "no Claude Desktop installation detected"}\n\nBackup copy path:\n${appliedBackupPath || "no Claude Desktop installation detected"}\n\nSelected MCP servers:\n${appliedSelectedMcpServers.length ? appliedSelectedMcpServers.join("\\n") : "none"}\n\nMCPs replaced:\n${appliedReplacedMcpServers.length ? appliedReplacedMcpServers.map((server) => `${server.sectionName}: ${server.npmPackage}`).join("\\n") : "none"}\n\n${data.message || "Restart Claude Desktop for changes to take effect."}`;',
+    '    applySummaryResult.classList.remove("is-hidden");',
+    '    applyButton.style.display = "none";',
+    '    closePageButton.disabled = false;',
+    '    status.textContent = "";',
+    '  } catch (error) {',
+    '    applyButton.disabled = false;',
+    '    closePageButton.disabled = false;',
+    '    status.textContent = `Apply failed: ${error.message}`;',
+    '  }',
+    '});',
     'closePageButton.addEventListener("click", () => {',
+    '  fetch("/api/close", { method: "POST", keepalive: true }).catch(() => {});',
     '  window.close();',
     '  setTimeout(() => {',
     '    if (!window.closed) {',
@@ -565,6 +716,7 @@ function startLocalServer(message, configPath, openHandler = openBrowser) {
     let server;
     let submitResolved = false;
     let resolveSubmitted;
+    let latestSubmission = null;
     const submitted = new Promise((submittedResolve) => {
       resolveSubmitted = submittedResolve;
     });
@@ -589,7 +741,14 @@ function startLocalServer(message, configPath, openHandler = openBrowser) {
           return;
         }
 
-        if (request.method === 'POST' && requestUrl.pathname === '/api/submit') {
+        if (request.method === 'POST' && requestUrl.pathname === '/api/close') {
+          response.writeHead(204);
+          response.end();
+          server.close(() => finishSubmission(latestSubmission));
+          return;
+        }
+
+        if (request.method === 'POST' && (requestUrl.pathname === '/api/submit' || requestUrl.pathname === '/api/apply')) {
           let bodyBuffer = '';
 
           request.setEncoding('utf8');
@@ -611,13 +770,19 @@ function startLocalServer(message, configPath, openHandler = openBrowser) {
                 response.end(JSON.stringify({ error: 'Invalid management server value' }));
                 return;
               }
-              const responsePayload = createSubmitResponse(configPath, parsedBody);
+              latestSubmission = parsedBody;
+              const responsePayload = requestUrl.pathname === '/api/apply'
+                ? createApplyResponse(configPath, parsedBody)
+                : createSubmitResponse(configPath, parsedBody);
               response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
               response.end(JSON.stringify(responsePayload));
-              server.close(() => finishSubmission(parsedBody));
+
+              if (requestUrl.pathname === '/api/apply') {
+                server.close(() => finishSubmission(parsedBody));
+              }
             } catch {
               response.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-              response.end(JSON.stringify({ error: 'Invalid JSON payload' }));
+              response.end(JSON.stringify({ error: requestUrl.pathname === '/api/apply' ? 'Unable to apply configuration' : 'Invalid JSON payload' }));
             }
           });
 
@@ -701,7 +866,9 @@ if (require.main === module) {
 }
 
 module.exports = {
+  applyClaudeDesktopConfig,
   buildDialogHtml,
+  createApplyResponse,
   createSubmitResponse,
   createDefaultFormValues,
   deriveEnvValues,
