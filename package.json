@@ -1,0 +1,20 @@
+{
+  "name": "cpmcp",
+  "version": "0.1.0",
+  "description": "Minimal CLI for locating Claude Desktop config.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mkol5222/cpmcp.git"
+  },
+  "homepage": "https://github.com/mkol5222/cpmcp",
+  "bugs": {
+    "url": "https://github.com/mkol5222/cpmcp/issues"
+  },
+  "bin": {
+    "cpmcp": "bin/cpmcp.js"
+  },
+  "files": [
+    "bin/"
+  ],
+  "license": "UNLICENSED"
+}
